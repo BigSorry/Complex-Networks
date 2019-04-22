@@ -36,11 +36,6 @@ print(len(friendsData))
 campaigns = None
 friends = None
 
-# graphFriends = nx.DiGraph()
-# for [t, node1, node2] in friendsData:
-#     graphFriends.add_edge(node1, node2)
-# nx.write_graphml(graphFriends, 'graphFriends.graphml')
-
 graphCamp = nx.DiGraph()
 for [camp, t, node1, node2] in campaignData:
     tstamp = math.ceil((t-beginTime+1)/day)
@@ -53,21 +48,19 @@ for [camp, t, node1, node2] in campaignData:
     old_link_set[node1].add((node2, tstamp))
     old_link_set[node2].add((node1, tstamp))
 
-old_infected = set()
-old_number_infected = np.empty(240*60)
 
 infec = [set() for x in range(0, 240*60)]
+for [camp, t, node1, node2] in campaignData:
+    tstamp = math.floor((t - beginTime + 1) / 60)
+    if tstamp < 240*60:
+        infec[tstamp].add(node2)
 
-
-
-
-for i in range(0, 240*60):
-    for [camp, t, node1, node2] in campaignData:
-        tstamp = math.floor((t - beginTime + 1) / (day*60))
-        if tstamp <= i:
-            old_infected.add(node1)
-            old_infected.add(node2)
-    old_number_infected[i] = len(old_infected)
+old_number_infected = np.zeros(240*60)
+for x in range(0, 240*60):
+    if x == 0:
+        old_number_infected[x] = len(infec[x])
+    else:
+        old_number_infected[x] = len(infec[x]) + old_number_infected[x-1]
 
 x_axis = [i+1 for i in range(0, 240*60)]
 
@@ -75,14 +68,11 @@ plt.figure(4)
 plt.plot(x_axis, old_number_infected, 'red', label="number of infected nodes")
 
 
-
-
-
 graphComplete = nx.Graph()
-# for [t, node1, node2] in friendsData:
-#     graphComplete.add_node(node1, color='green')
-#     graphComplete.add_node(node2, color='green')
-#     graphComplete.add_edge(node1, node2)
+for [t, node1, node2] in friendsData:
+    graphComplete.add_node(node1, color='green')
+    graphComplete.add_node(node2, color='green')
+    graphComplete.add_edge(node1, node2)
 for [camp, t, node1, node2] in campaignData:
     tstamp = int(math.floor((t-beginTime+1)/day))
     if not graphComplete.has_node(node1):
@@ -132,37 +122,57 @@ print("number of edges: ", graphComplete.number_of_edges())
 
 
 # model
-alpha = 1.5
-beta = 0.2
-hours = 10 * 24 * 60
+best_rmse = [900, 0, 0]
+for s in range(20, 21):
+    for t in range(50, 51):
+        alpha = s/10
+        beta = t/100
 
-model_graph = nx.Graph()
+        print("alpha:", alpha, " beta:", beta)
+# alpha = 2.5
+# beta = 0.02
+        hours = 10 * 24 * 60
 
-link_set = {x: set() for x in nx.nodes(graphComplete)}
-for x in nx.nodes(graphComplete):
-    link_set[x].update(nx.all_neighbors(graphComplete, x))
-link_degree = {x: len(link_set[x]) for x in link_set.keys()}
-tot_degree = sum([x**alpha for x in link_degree.values()])
+        model_graph = nx.Graph()
+        link_set = {x: set() for x in nx.nodes(graphComplete)}
+        for x in nx.nodes(graphComplete):
+            link_set[x].update(nx.all_neighbors(graphComplete, x))
+            link_degree = {x: len(link_set[x]) for x in link_set.keys()}
+            tot_degree = sum([x**alpha for x in link_degree.values()])
 
-infected = set()
-infected.add(20682)
-model_graph.add_node(20682, color=-1)
-number_infected = np.empty(hours)
-for i in range(0, hours):
-    new_infected = set()
-    for old_node in infected:
-        for new_node in link_set[old_node]:
-            if new_node not in infected and new_node not in new_infected:
+        infected = set()
+        infected.add(20682)
+        model_graph.add_node(20682, color=-1)
+        number_infected = np.empty(hours)
+        for i in range(0, hours):
+            new_infected = set()
+            for old_node in infected:
+                for new_node in link_set[old_node]:
+                    if new_node not in infected and new_node not in new_infected:
+                        beta_node = beta * (link_degree[old_node]/tot_degree) * graphComplete.number_of_nodes()
+                        # print("beta:", beta, " t:", math.exp((-hours)/(5*24*60)), " link:", (link_degree[old_node]/tot_degree), " n:", graphComplete.number_of_nodes())
+                        # print(beta_node)
+                        r = random()
+                        if r <= beta_node:
+                            new_infected.add(new_node)
+                            model_graph.add_node(new_node, color=i)
+                            model_graph.add_edge(old_node, new_node)
+            infected.update(new_infected)
+            number_infected[i] = len(infected)
 
-                beta_node = beta * math.exp(-hours/5000) * (link_degree[old_node]/tot_degree) * graphComplete.number_of_nodes()
-                print(beta_node)
-                r = random()
-                if r <= beta_node:
-                    new_infected.add(new_node)
-                    model_graph.add_node(new_node, color=i)
-                    model_graph.add_edge(old_node, new_node)
-    infected.update(new_infected)
-    number_infected[i] = len(infected)
+
+        rmse = 0
+        for i in range(0, len(old_number_infected)):
+            rmse += ((old_number_infected[i] - number_infected[i]) ** 2)
+        rmse /= len(number_infected)
+        rmse = math.sqrt(rmse)
+        if rmse < best_rmse[0]:
+            best_rmse[0] = rmse
+            best_rmse[1] = alpha
+            best_rmse[2] = beta
+
+print("best values:", best_rmse)
+
 
 node_colors = []
 for node in model_graph.nodes(data=True):
@@ -183,8 +193,8 @@ for node in model_graph.nodes(data=True):
     else:
         node_colors.append('black')
 
-plt.figure(2)
-nx.draw(model_graph, with_labels=False, node_size=25, node_color=node_colors)
+# plt.figure(2)
+# nx.draw(model_graph, with_labels=False, node_size=25, node_color=node_colors)
 
 x_axis = [i+1 for i in range(0, hours)]
 
@@ -192,10 +202,6 @@ plt.figure(3)
 plt.plot(x_axis, number_infected, 'red', label="number of infected nodes")
 
 print(number_infected)
-
-
-# print(link_set)
-# print(link_degree)
 
 plt.show()
 
